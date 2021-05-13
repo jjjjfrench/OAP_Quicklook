@@ -14,4 +14,4 @@ OAP_Quicklook can either use 'custom' mode, in which files, times, and parameter
    
 The word document: 'OAP-Quicklook-Progam-Guide.docx' provides detailed instrunctions and descriptions of use and modification of code.
 
-The file 'CSV-Example.csv' is an example csv file for setting up OAP_Quicklook in batch mode
+The file 'Sample-Setup-File.csv' is an example csv file for setting up OAP_Quicklook in batch mode
