@@ -7,6 +7,7 @@ Procedure to run: 'OAP_Quicklook' -- two options
     OR 
     Option 2: Open and compile individually all of the procedure files in the package. And then run OAP_quicklook
     
-    OAP_Quicklook can either use 'custom' mode, in which files, times, and parameters are set (hardwired) in code procedure 'oap_quicklook_getsetup.pro'
+OAP_Quicklook can either use 'custom' mode, in which files, times, and parameters are set (hardwired) in code procedure 'oap_quicklook_getsetup.pro'
     OR
     run in file mode where a setup file (.csv) is used to define input files, times, and parameters are set within the file. This is useful for running in a 'batch' mode with several runs per flight.
+   
