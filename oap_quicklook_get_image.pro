@@ -1,4 +1,4 @@
-FUNCTION OAP_QUICKLOOK_GET_IMAGE, STARTING_VARIABLES, FILE_VARIABLES, RUNNING_VARIABLES, FIRST, LAST, STP, TOT_SLICE, STOP_VARIABLE
+FUNCTION OAP_QUICKLOOK_GET_IMAGE, STARTING_VARIABLES, FILE_VARIABLES, RUNNING_VARIABLES, FIRST, LAST, n_buffers= n_buffers, time_array = time_array, data_record = data_record
   ;Unpacks structured varaibles that were defined by the previous functions
   ;This first block is from STARTING_VARIABLES
   PROC_FILE=STARTING_VARIABLES.FIELD01
@@ -25,9 +25,8 @@ FUNCTION OAP_QUICKLOOK_GET_IMAGE, STARTING_VARIABLES, FILE_VARIABLES, RUNNING_VA
   DATA_WIDTH=RUNNING_VARIABLES.DATA_WIDTH
   DATA_LENGTH=RUNNING_VARIABLES.DATA_LENGTH
   HHMMSS=RUNNING_VARIABLES.HHMMSS
+  x = 0
 
-  ;makes array for use later
-  position= make_array(1701, VALUE=-999)
 
   ;opens up DIMG and PROC files
   PROC= ncdf_open(PROC_file)
@@ -36,181 +35,185 @@ FUNCTION OAP_QUICKLOOK_GET_IMAGE, STARTING_VARIABLES, FILE_VARIABLES, RUNNING_VA
   ;Intializes/resets varaibles
   stp= -1
   stt= -1
-
-  FOR i = first, last DO BEGIN
-    IF (scnt[i] LT 1) THEN CONTINUE ;particle has no slice count, skip it
-    IF (Display_particles_touching_edge EQ 'off') OR (Display_particles_touching_edge EQ 'OFF') THEN BEGIN
-      IF (touching_edge[i] GT 1) THEN CONTINUE ;image cannot be touching the edge
-    ENDIF  
-    IF (Display_rejected_particles EQ 'off') OR (Display_rejected_particles EQ 'OFF') THEN BEGIN
-        ;with our data sets we found that the following particle rejections were ok and should be included: 48,104,72,117,82
-        IF ((AUTO_REJECT[I] NE 48) AND (AUTO_REJECT[I] NE 104) AND (AUTO_REJECT[I] NE 72) AND (AUTO_REJECT[I] NE 117) AND (AUTO_REJECT[I] NE 82)) THEN CONTINUE
-    ENDIF 
-
-    ;If auto_reject is equal to 122 then this means that particle has a zero diameter image(in other words it should be a blank space). But that is not always the case.
-    ;Due to the computer thinking that it is a zero diameter image it has a diameter of not a number (NaN).
-    ;If we want to display rejected particles and set a minium or maxium diameter past 0 or 15000 then we want to be able to read the diameter of every particle
-    ;The following lines allow use to not display a particle if we are setting a set of diameters and if we are displaying rejected particles.
-    ;If we do not want to display rejected particles then we will dismiss all paticles that have a auto_reject of 50 or higher thus stopping this issues befor it occurs.
-    IF (minD GT 0) OR (maxD LT 15000) THEN BEGIN
-      IF (auto_reject[i] EQ 122) THEN CONTINUE
-
-    ENDIF
-    
-    IF (diam[i] LT minD) THEN CONTINUE        ;particle is too small, skip it
-    IF (diam[i] GT maxD) THEN CONTINUE        ;particle is too large, skip it
-    disp_parts=temporary(disp_parts)+1
-    pos_disp[part_cnt] = tot_slice
-    tot_slice = tot_slice+scnt[i]+1        ;particle is accepted add slices to the buffer, plus 1 for an empty slice
-
-
-    IF (stt EQ -1) THEN Stt = i   ;if this is the first particle in buffer, set stt
-    stp = i                     ;assume it is last particle in buffer (this will get overwritten on next iteration if it is not)
-
-    ;If we have more than tmp_length slices, our buffer is full (this depends on probe type)
-    IF (TOT_SLICE GE tmp_length) THEN BEGIN
-      stp=i-1
-      time_disp[part_cnt] = -999
-      pos_disp[part_cnt] = -999
-      BREAK
-    ENDIF
-    part_cnt=temporary(part_cnt)+1
-  ENDFOR
-
-  ;figures out what times the particles are at, this is used in the buffer titles
-  time_dis_stt= hhmmss(stt)
-  time_dis_stp= hhmmss(stp)
-
-  ;Determine how many data records to retrieve
-  rec_cnt = rec[[stp]]-rec[[stt]]+1
-  ;if the program gets here and the stp is still -1 then it will repeat this while loop forever, the following fixes that before a buffer is drawn
-  IF (STP EQ -1) THEN BEGIN
-    STOP_VARIABLE='ON'
-    RETURN, 0
+  
+  ;The following code locates particles indices via the WHERE() function. The ARRAY_INTERSECTION() function finds the common indicies between each paritcle index array (diam_ind, scnt_ind, etc).
+  ;The common indicies between diam_ind, scnt_ind, and autorej_ind are the final indicies of accepted particles. 
+  
+  ;Finds the indices where the diameter of the particle is less than the maximum diameter, and less than the minimum
+  diam_ind = WHERE((diam LT maxD[0]) AND (diam GT minD[0]))
+  
+  ;Finds the indices where the slice count of the particle are greater than or equal to one.
+  scnt_ind = WHERE(scnt GE 1)
+  
+  ;Finds the inidices where Auto Rejects equal a certain value
+  autorej_ind = WHERE((AUTO_REJECT EQ 48) OR (AUTO_REJECT EQ 104) OR (AUTO_REJECT EQ 72) OR (AUTO_REJECT EQ 117) OR (AUTO_REJECT EQ 82) OR (auto_reject EQ 122))  
+  
+  ;Looks for the common indices between the particle diameter array, and the slice count array, then returns those indices
+  part_ind = ARRAY_INTERSECTION(diam_ind, scnt_ind)
+  
+  ;This line finds the common indicies between particles that passed the auto_reject line, and the part_ind array from above.
+  part_ind = ARRAY_INTERSECTION(autorej_ind, part_ind)
+  
+  ;This line looks for instances where particles are not touching the edge. It is only executed if specified by the user beforehand.
+  IF (Display_particles_touching_edge EQ 'off') OR (Display_particles_touching_edge EQ 'OFF') THEN BEGIN
+    touch_ind = WHERE( touching_edge LT 1)
+    part_ind = ARRAY_INTERSECTION(touch_ind, part_ind)
   ENDIF
-
-
-  ;get the data and put the good particles in the display buffers
+  
+  ;We only want particles within the specified time range. To do this, we look for particle indicies between the earliest and latest time range. 
+  time_index = WHERE(part_ind GE first AND part_ind LE last)
+  
+  ;Plug the time indices into the partlice_index array, and we have all the accepted particles within the specified time range.
+  part_ind = part_ind[time_index]
+  
+  ;Determines the number of particles in part_ind. We will use this number to loop through all particles in the coming FOR loop
+  nparts = N_ELEMENTS(part_ind)
+  
+  ;These two lines find the first and last particle indices. These indices are used in the next line 
+  ;to determine how much rec data to pull from the DIMG file
+  Stt = part_ind[0]
+  stp = part_ind[-1]
+  rec_cnt = rec[[stp]]-rec[[stt]]+1
+  
+  ;Opens the DIMG file using the NCDF_VARID() function. This data will be called later in a coming FOR loop.
   varid = NCDF_VARID(DIMG, 'data')
   NCDF_VARGET, DIMG, varid, tmp_data, OFFSET=[0,0,rec[Stt]],COUNT=[data_width,data_length,rec_cnt]
   IF prbtype EQ 'CIPG' THEN tmp = LONARR(tmp_width, tmp_length)+3 ELSE tmp = LONARR(tmp_width, tmp_length)
 
-  x=0
+  ;Defines variables to use in the coming FOR loop
+  tmp_cnt = 0
+  buf_cnt = 0
+  ;This FOR loop iterates through each particle, and builds buffers via their slice counts. The loop adds each slice count until
+  ;the buffer fills to 1700. Once the buffer is full, the loop goes back one particle, and adds one to the total buffer count.
+  
+  ;Iterates from the first particle (0) to the last (nparts-1)
+  FOR i = 0L, nparts-1 DO BEGIN
+    ;Slice counts are added to tmp_cnt until it reaches greater than 1700
+    tmp_cnt = tmp_cnt + scnt[part_ind[i]]
+    IF (tmp_cnt GT 1700) THEN BEGIN
+      ;Now that tmp_cnt is past 1700, go back one particle, so it can be added to the next buffer
+      i=i-1
+      ;Adding one to the buffer count
+      buf_cnt=buf_cnt+1
+      ;Reseting the variable
+      tmp_cnt=0
+      CONTINUE
+    ENDIF
+  ENDFOR
+
+  ;Need to add one to the buffer count because the last one in the loop was partially filled, and did not trigger the IF statement
+  ;to add it to n_buffers. 
+  n_buffers = buf_cnt+1
+  
+  ;Creating an array to put the particle times in. This is used for image generation later. Need to LONG the array because of the high index values.
+  time_array = MAKE_ARRAY(2, n_buffers, /LONG, VALUE = 0)
+  
+  ;Adding the n_buffer dimension to the tmp array
+  tmp = LONARR(tmp_width, tmp_length, n_buffers)
+  
+  ;Defining variables to use in the FOR loop
   arr_pos = 0
-  FOR i = stt, stp DO BEGIN
-    IF (scnt[i] LT 1) THEN CONTINUE ;particle has no slice count, skip it
-    IF (Display_particles_touching_edge EQ 'off') OR (Display_particles_touching_edge EQ 'OFF') THEN BEGIN
-      IF (touching_edge[i] GT 1) THEN CONTINUE  ;image cannot be touching the edge
+  tmp_cnt = 0
+  buf_cnt = 0
+  
+  ;The main concept with this FOR loop is its looping through each accepted particle, and filling the buffers with information. While tmp_cnt
+  ;is less than 1700, it adds the particle information from the DIMG file (via tmp_data) to a buffer. When tmp_cnt reaches 1700, it will reset 
+  ;tmp_cnt, and begin filling the next buffer with particle information. 
+  
+  ;Generating the first position of the time array
+  time_pos = 0
+  ;Looping through each particle from 0 to the last (nparts-1).
+  FOR i = 0L, nparts-1 DO BEGIN
+    IF tmp_cnt EQ 0 THEN BEGIN
+      ;Adding the first particle's time stamp to the time_array
+      time_array[0,time_pos] = HHMMSS(part_ind[i])
     ENDIF
-    IF (Display_rejected_particles EQ 'off') OR (Display_rejected_particles EQ 'OFF') THEN BEGIN
-      ;with our data sets we found that the following particle rejections were ok and should be included: 48,104,72,117,82
-      IF ((AUTO_REJECT[I] NE 48) AND (AUTO_REJECT[I] NE 104) AND (AUTO_REJECT[I] NE 72) AND (AUTO_REJECT[I] NE 117) AND (AUTO_REJECT[I] NE 82)) THEN CONTINUE
-    ENDIF
-   
-   ;If auto_reject is equal to 122 then this means that particle has a zero diameter image(in other words it should be a blank space). But that is not always the case. 
-   ;Due to the computer thinking that it is a zero diameter image it has a diameter of not a number (NaN). 
-   ;If we want to display rejected particles and set a minium or maxium diameter past 0 or 15000 then we want to be able to read the diameter of every particle
-   ;The following lines allow use to not display a particle if we are setting a set of diameters and if we are displaying rejected particles. 
-   ;If we do not want to display rejected particles then we will dismiss all paticles that have a auto_reject of 50 or higher thus stopping this issues befor it occurs.   
-   IF (minD GT 0) OR (maxD LT 15000) THEN BEGIN
-    IF (auto_reject[i] EQ 122) THEN CONTINUE
-   ENDIF
+    ;Adding to our tmp_cnt. While it is less than 1700, begin adding data from the DIMG file to the buffer.
+    tmp_cnt = tmp_cnt + scnt[part_ind[i]]
     
-    IF (diam[i] LT minD) THEN CONTINUE        ;particle is too small, skip it
-    IF (diam[i] GT maxD) THEN CONTINUE        ;particle is too large, skip it
+    IF (tmp_cnt LE 1700) THEN BEGIN
+      ;Adding the current particle information into the buffer.
+      tmp[*,arr_pos:arr_pos+scnt[part_ind[i]]-1, buf_cnt] = tmp_data[*,pos[1,part_ind[i]]-scnt[part_ind[i]]+1:long(pos[1,part_ind[i]]),long(rec[part_ind[i]]-rec[stt])]
+      
+      ;for 2DS data, if all diodes are blocked, the cdf file shows everything unblocked. The following fixes that
+      inds = WHERE( TOTAL(tmp[*,arr_pos:arr_pos+scnt[part_ind[i]]-1],1) EQ 0)
+      IF (inds[0] NE -1) THEN tmp[*,arr_pos+inds] = 65535
+      
+      ;Adding to the increment array position for next iteration of the loop
+      arr_pos = arr_pos+scnt[part_ind[i]] 
+    
+    ENDIF ELSE BEGIN
+      ;Once the buffer has filled, the loop has to go back one particle to begin building the next buffer.
+      ;Add one to buf_cnt, then reset tmp_cnt and arr_pos to 0 to get the position correct at the start of the next buffer.
+      i=i-1
+      buf_cnt=buf_cnt+1
+      ;Adding the last particle time stamp to the other dimension of the array
+      time_array[1,time_pos] = HHMMSS(part_ind[i])
+      tmp_cnt=0
+      arr_pos = 0
+      time_pos = time_pos + 1
+      CONTINUE      
+    ENDELSE
 
-    tmp[*,arr_pos:arr_pos+scnt[i]-1] = tmp_data[*,pos[1,i]-scnt[i]+1:pos[1,i],rec[i]-rec[stt]]
-
-    ;for 2DS data, if all diodes are blocked, the cdf file shows everything unblocked....following fixes that
-    inds = WHERE( TOTAL(tmp[*,arr_pos:arr_pos+scnt[i]-1],1) EQ 0)
-    IF (inds[0] NE -1) THEN tmp[*,arr_pos+inds] = 65535
-   
-    arr_pos = arr_pos+scnt[i]+1               ;the 1 is to add an empty slice between particles to make it easier to see on paper
-
-    position[x,0]=arr_pos
-    x=x+1
   ENDFOR
   
-
-
+  ;adding the last time stamp to the array, because the ENDIF is not called upon in the last iteration of the FOR loop.
+  time_array[1,buf_cnt]= HHMMSS(part_ind[nparts-1])
   ;now that we have filled the buffer with our data, we will transpose the data into displayable images.
   ;The following statements build the data records based on probe type
   CASE 1 of
     prbtype EQ '2DS' or prbtype EQ 'HVPS': BEGIN
       if (stp eq -1) then break
-      data_record = BYTARR(128,1700)
+      data_record = BYTARR(128,1700, n_buffers)
       ;close,1
       ;convert to binary
-      FOR k=0,1700-1 DO BEGIN
-        FOR j=0,7 DO BEGIN
-          FOR i = 16, 31 DO BEGIN
-            pow2 = 2L^(i-16)
-            IF (LONG(tmp[j,k]) AND pow2) NE 0 THEN $
-              data_record[j*16L+(i-16),k]=0 ELSE data_record[j*16L+(i-16),k]=255
+      FOR l=0, n_buffers-1 DO BEGIN
+        FOR k=0,1700-1 DO BEGIN
+          FOR j=0,7 DO BEGIN
+            FOR i = 16, 31 DO BEGIN
+              pow2 = 2L^(i-16)
+              IF (LONG(tmp[j,k,l]) AND pow2) NE 0 THEN $
+                data_record[j*16L+(i-16),k,l]=0 ELSE data_record[j*16L+(i-16),k,l]=255
+            ENDFOR
+            data_record[j*16L:j*16L+15,k,l] = REVERSE(data_record[j*16L:j*16L+15,k,l],1)
           ENDFOR
-          data_record[j*16L:j*16L+15,k] = REVERSE(data_record[j*16L:j*16L+15,k],1)
         ENDFOR
       ENDFOR
 
       data_record = REFORM(data_record)
       tmp = data_record
-      data_record=LONARR(134,1706)
-      data_record[3:130,3:1702]=tmp
-
+      data_record=LONARR(134,1706,n_buffers)
+      data_record[3:130,3:1702,*]=tmp
     END
-    ; if using CIP rather than CIPG data you will need to uncomment this section below, it is folded up
-    ;    prbtype EQ 'CIP' : BEGIN
-    ;      data_record=BYTARR(64,850)
-    ;      ;convert to binary
-    ;      FOR k=0,850-1 DO BEGIN
-    ;        FOR j=0,7 DO BEGIN
-    ;          FOR i = 24, 31 DO BEGIN
-    ;            pow2 = 2L^(i-24)
-    ;            IF (LONG(tmp[j,k]) AND pow2) NE 0 THEN $
-    ;              data_record[j*8L+(i-24),k]=0 ELSE data_record[j*8L+(i-24),k]=255
-    ;          ENDFOR
-    ;          data_record[j*8L:j*8L+7,k] = REVERSE(data_record[j*8L:j*8L+7,k],1)
-    ;        ENDFOR
-    ;      ENDFOR
-    ;
-    ;      data_record = REFORM(data_record)
-    ;      ;for CIP data, if all diodes are blocked, the cdf file shows everything unblocked....following fixes that
-    ;      end_buf=1
-    ;      FOR i=850-1,0,-1 DO BEGIN
-    ;        IF(TOTAL(data_record[*,i]) EQ 64 ) THEN data_record[*,i]=0
-    ;      ENDFOR
-    ;
-    ;      ;the following draws a border around the buffer
-    ;      tmp = data_record
-    ;      data_record=LONARR(68,854)
-    ;      data_record[2:65,2:851]=tmp
-    ;    END
 
     prbtype EQ 'CIPG' : BEGIN
-      data_record=BYTARR(64,850)
+      data_record=BYTARR(64,850,n_buffers)
       ;convert to binary
-      FOR k=0,850-1 DO BEGIN
-        FOR j=0,63 DO BEGIN
-          IF (LONG(tmp[j,k]) LE 2) THEN $
-            data_record[j,k]=0 ELSE data_record[j,k]=255
-          data_record[j,k] = REVERSE(data_record[j,k],1)
+      FOR l=0, n_buffers-1 DO BEGIN
+        FOR k=0,850-1 DO BEGIN
+          FOR j=0,63 DO BEGIN
+            IF (LONG(tmp[j,k,l]) LE 2) THEN $
+              data_record[j,k,l]=0 ELSE data_record[j,k,l]=255
+            data_record[j,k,l] = REVERSE(data_record[j,k,l],1)
+          ENDFOR
         ENDFOR
       ENDFOR
-
+      
       data_record = REFORM(data_record)
       ;for CIP data, if all diodes are blocked, the cdf file shows everything unblocked....following fixes that
       end_buf=1
-      FOR i=850-1,0,-1 DO BEGIN
-        IF(TOTAL(data_record[*,i]) EQ 64 ) THEN data_record[*,i]=1
+      FOR l=0, n_buffers-1 DO BEGIN
+        FOR i=850-1,0,-1 DO BEGIN
+          IF(TOTAL(data_record[*,i,l]) EQ 64 ) THEN data_record[*,i,l]=1
+        ENDFOR
       ENDFOR
 
       ;the following draws a border around the buffer
       tmp = data_record
-      data_record=LONARR(68,854)
-      data_record[2:65,2:851]=tmp
+      data_record=LONARR(68,854,n_buffers)
+      data_record[2:65,2:851,*]=tmp
     END
   ENDCASE
-  FINAL_VARIABLES=CREATE_STRUCT('DATA_RECORDS', DATA_RECORD, 'TIME_DIS_STT', TIME_DIS_STT, 'TIME_DIS_STP', TIME_DIS_STP)
 
-  RETURN, FINAL_VARIABLES
-END
+
+END   

@@ -1,4 +1,5 @@
 PRO OAP_QUICKLOOK
+
 ;User input is needed for the INPUT_TYPE, file-directory and DELETE_FILE
 ;would you like to input custom data or read data from a .CSV file
 ;IF A CSV FILE IS BEING USED PLEASE HAVE THE ORDER OF THE COLLUMS AS FOLLOWS
@@ -7,7 +8,7 @@ PRO OAP_QUICKLOOK
 INPUT_TYPE='file' ; the two options for this varaible are 'file' or 'custom'. If file is selected FILE you will be promptED to pic a .csv file
 ;File_directory is where the diolg box in OAP_QUICKLOOK_GETSETUP should be looking. this can be a broad search or narrow. 
 ;It can be left blank if the directory is not know or if INPUT_TYPE= 'custom' 
-file_directory='/home/medwar29/Desktop/'
+file_directory='/home/chohman/SNOWIE/Quicklook_Legs/2DS.H'
 ;!!!!!!!!
 ;If the DELETE_FILE feature is on, and the output_file_final matches an existing file then the file will be deleted to allow for a new one
 ;The program will pause before a file is deleted and show a message that a file is about to be deleted.
@@ -23,8 +24,8 @@ INFILE='' ;the infile is csv file that we will be reading from, the user will be
 FIRST=0 ;this is the start time index, this will be changed in OAP_QUICKLOOK_READPROC
 LAST=1  ;this is the end_time index, this will be changed in OAP_QUICKLOOK_READPROC
 STP=-1  ;this is the last possible particle in the display buffer, this will be changed in OAP_QUICKLOOK_GET_IMAGE
-RUN=1    ;Run tells us how many times we have gone through the while loop. It is set to 2 intially to allow for the buffers to be offest for the intial page
-TOT_SLICE = 0 ;this is how many buffers the slice has
+;RUN=1    ;Run tells us how many times we have gone through the while loop. It is set to 2 intially to allow for the buffers to be offest for the intial page
+;TOT_SLICE = 0 ;this is how many buffers the slice has
 STOP_VARIABLE='OFF' ;the stop varaible tells us if there are no more particles in a possible time frame. The default is off, if it is turn to on then the program will act accordingly
 LINE_READ_VARIABLE='run' ;this is the default if we want to run through a custom entry. 
 page=1 ;this is the page counter for the pdf
@@ -49,8 +50,10 @@ WHILE (FILE_RUN LT RECORD_COUNT) DO BEGIN
   ;RETURNS A STRUCTURED VARIABLE CONSISTING OF; PROC FILE, DIMG FILE, DATE, START TIME SEC, END TIME SEC, PARTICLES TOUCHING EDGE,
   ;BAD REJECT, minD, maxD, OUTPUT FILE PATH, OUTPUT FILE TYPE
   ;IF THERE IS A .CSV FILE BEING USED THEN THE FILE RUN, RECORD COUNT, AND INFILE WILL BE IN THE STRUCTURE AS WELL.
+
   STARTING_VARIABLES= OAP_QUICKLOOK_GETSETUP(INPUT_TYPE, FILE_RUN, RECORD_COUNT, INFILE, LINE_READ_VARIABLE, file_directory)
 
+  
   ;If this is equal to no_file then the user did not put in a input file and so we want to exit the program. 
   IF STARTING_VARIABLES.FIELD01 EQ 'NO_FILE' THEN RETURN
   
@@ -84,10 +87,11 @@ WHILE (FILE_RUN LT RECORD_COUNT) DO BEGIN
   ;it also uses the OUTPUT_FILE_FINAL to check and see if a file alread exists and if it does wheather to delete it or not. 
   ;The conversion of sec to hhmmss can also be found in this program. 
   ;RETURNS A STRUCTURED VARIABLE CONSITING OF; START TIME, END TIME, OUTPUT_FILE_FINAL, PRBTYPE, AND PRBTYPE_T
+
   FILE_VARIABLES= OAP_QUICKLOOK_FILES(STARTING_VARIABLES, DELETE_FILE, FILE_DELETE_STOP_VARIABLE, FILE_RUN)
   Stopper=FILE_VARIABLES.STOP_VARIABLE
-  IF Stopper EQ 'on' THEN CONTINUE
 
+  IF Stopper EQ 'on' THEN CONTINUE
   ;This function reads through the proc file and finds the discriptions of each of the particles. 
   ;this function also sets the start_time_index and end_time_index. 
   ;It also describes the buffer length and width that should be used based on prop type
@@ -95,7 +99,6 @@ WHILE (FILE_RUN LT RECORD_COUNT) DO BEGIN
   ;PARTICLES TOUCHING THE EDGE, AUTO REJECT, DIAMETER OF PARTICLES, TIME DISP, POSIBLE DISPLAY, PART COUNT, DIPSLAYED PARTS,
   ;DATA LENGTH, DATA WIDTH, TMP LENGTH, AND TEMP WIDTH
   RUNNING_VARIABLES= OAP_QUICKLOOK_READPROC(STARTING_VARIABLES, FILE_VARIABLES, FIRST, LAST, Error_variable, File_run)
-
   ;Unpacks varaibles to use in the title page of the pdf document
   DATE=STARTING_VARIABLES.FIELD03
   START_TIME_SEC=STARTING_VARIABLES.FIELD04
@@ -143,96 +146,147 @@ WHILE (FILE_RUN LT RECORD_COUNT) DO BEGIN
     CONTINUE
   ENDIF
 
-  ;The while loop will loop over particles till there are no more particles in that given time. This while loop utilizes the OAP_QUICKLOOK_GET_IMAGE fuction.
-  ;The OAP_QUICKLOOK_GET_IMAGE function utilizes variables all of the above functions. It sends back a structured variable consiting of data records and stt/stp time displays
-  ;The OAP_QUICKLOOK_GET_IMAGE function reads through the PROC and DIMG files to get fill and translate the buffers into data that will be used to build an image. 
-  ;After the OAP_QUICKLOOK_GET_IMAGE function is complete the program then builds an image and writes that to a pdf. No image will be displayed through idl.
-  WHILE (STP LE LAST) DO BEGIN
+  ;OAP_QUICKLOOK_GET_IMAGE collects the buffer data needed to generate a quicklook image. The function reads in Starting_Variables (Defined by the user)
+  ;File_variables (Probe type, output file path, etc), Running_Variables (Particle variables like Rec, Slice count, etc), as well as start and end times. 
+  ;The function also passes through three key words: N_buffers (The number of buffers), time_array (Start and end times for each buffer),
+  ; and Data_Record (An array the GET_IMAGE function fills to hold particle data for each buffer). The function takes these initial variables and filters through accepted particles.
+  ; Once the particles are found, they are assigned to buffers, and and passed back into the main program. 
+
+  FINAL_VARIABLES= OAP_QUICKLOOK_GET_IMAGE(STARTING_VARIABLES, FILE_VARIABLES, RUNNING_VARIABLES, FIRST, LAST, n_buffers = n_buffers, time_array=time_array, data_record = data_record)
+
+  ;Setting Variables for the coming for loop
+  runs = 1
+  window_counter = 0
+  pages_generated = 0
   
+  ;As the number of pages in the PDF rises, the time it takes to generate and append a new pages increases. This can become problematic with high page counts. To solve this issue, the code generates
+  ;one unique file per page. Another program joins these files together after they're generated. We implement this strategy when the page count is above 400.
+  IF n_buffers GE 4000 THEN BEGIN
+    print, "The number of pages in the file is greater than 400. Generating each page individually to reduce time."
+    IF n_buffers GT 0 THEN BEGIN
+       ;Looping through all the buffers from 0 - n_buffers - 1
+      FOR i =0, n_buffers - 1 DO BEGIN
+        ;Runs, counts how many buffers have been generated on a page. It starts out as 1 when it enters the FOR loop because the first page only has
+        ;9 buffers due to the header. From then on, 10 buffers are displayed on each page.
+        runs = runs + 1
+        ;Generates a new window if it is the second run. The first run already has a window generated from the beginning of this code.
+        IF (window_counter EQ 1) AND (runs EQ 1) THEN w=window(dimension=[2550,3330],/buffer)
+        ;A and B position the buffer chronologically on the page
+        A= (((10.-runs)/10)+.001)
+        B= (A+.099)
+        ;Generating the buffer. Data comes from data_record (i represents the current buffer), and the time stamp comes from time_array
+        im=image(transpose(LONG(data_record[*,*,i])), /current, POSITION=[0,A,1,B], RGB_TABLE=38,  $
+          TITLE= STRTRIM(string(time_array[0,i]),2) + '-' + STRTRIM(string(time_array[1,i]),2) + ' UTC', $
+          Font_Size=45)
+        ;Now that 10 buffers have been generated, add 1 to window_counter. The IF statement above will now trigger whenever runs EQ 1.
+        IF (runs EQ 10) THEN BEGIN
+          IF window_counter EQ 0 THEN BEGIN
+            window_counter = window_counter + 1
+          ENDIF
+          ;The following IF statements build the file name for each page. The format is '000.' Page 1 is 001, Page 10 is 010, etc.
+          IF pages_generated LT 10 THEN BEGIN
+            pages_string = string(pages_generated)
+            pages_string = STRTRIM(pages_string,1)
+            pages_string = "00" + pages_string
+          ENDIF
+          IF pages_generated GE 10 THEN BEGIN
+            pages_string = string(pages_generated)
+            pages_string = STRTRIM(pages_string,1)
+            pages_string = "0" + pages_string
+          ENDIF
+          IF pages_generated GE 100 THEN BEGIN
+            pages_string = string(pages_generated)
+            pages_string = STRTRIM(pages_string,1)
+          ENDIF
+          ;Generating page numbers, and saving the image.
+          pages_generated = pages_generated + 1
+          ;Finding the length of the output file name, so the code can remove the last four characters and add the '000' page number.
+          len = STRLEN(Output_file_final)
+          ;Removing the last four characters
+          Output_file_final_edit = STRMID(Output_file_final, 0 , len-4)
+          ;Adding the page number, and .PDF at the end.
+          Output_file_final_edit = Output_file_final_edit + pages_string +".PDF"
+          n=text(.97,.5, position=[.9,.985,.999,.99], font_size= 25, 'Page ' + STRTRIM(string(page),2))
+          w.SAVE, Output_file_final_edit ;Not appending, generating an individual file.
+          page=page+1
+          Runs=0
+        ENDIF
+          
+      ENDFOR
+     ENDIF ELSE BEGIN
+      ;This line triggers if there is no particles in the file. It prints the following text to the file.
+      n=text(.97,.5, position=[0,.8,.001,.85], font_size= 33, 'THERE ARE NO PARTICLES WITHIN THE GIVEN CONDITIONS')
+     ENDELSE
+  ENDIF
+  IF n_buffers LT 4000 THEN BEGIN
+    IF n_buffers GT 0 THEN BEGIN
+      ;Looping through all the buffers from 0 - n_buffers - 1
+      FOR i =0, n_buffers - 1 DO BEGIN
+        ;Runs, counts how many buffers have been generated on a page. It starts out as 1 when it enters the FOR loop because the first page only has
+        ;9 buffers due to the header. From then on, 10 buffers are displayed on each page.
+        runs = runs + 1
+        ;Generates a new window if it is the second run. The first run already has a window generated from the beginning of this code.
+        IF (window_counter EQ 1) AND (runs EQ 1) THEN w=window(dimension=[2550,3330],/buffer)
+        ;A and B position the buffer chronologically on the page
+        A= (((10.-runs)/10)+.001)
+        B= (A+.099)
+        ;Generating the buffer. Data comes from data_record (i represents the current buffer), and the time stamp comes from time_array
+        im=image(transpose(LONG(data_record[*,*,i])), /current, POSITION=[0,A,1,B], RGB_TABLE=38,  $
+          TITLE= STRTRIM(string(time_array[0,i]),2) + '-' + STRTRIM(string(time_array[1,i]),2) + ' UTC', $
+          Font_Size=45)
+        ;Now that 10 buffers have been generated, add 1 to window_counter. The IF statement above will now trigger whenever runs EQ 1.
+        IF (runs EQ 10) THEN BEGIN
+          IF window_counter EQ 0 THEN BEGIN
+            window_counter = window_counter + 1
+          ENDIF
+          ;Generating page numbers, and saving the image.
+          n=text(.97,.5, position=[.9,.985,.999,.99], font_size= 25, 'Page ' + STRTRIM(string(page),2))
+          w.SAVE, Output_file_final, /Append
+          page=page+1
+          Runs=0
+        ENDIF
 
-    FINAL_VARIABLES= OAP_QUICKLOOK_GET_IMAGE(STARTING_VARIABLES, FILE_VARIABLES, RUNNING_VARIABLES, FIRST, LAST, STP, TOT_SLICE, STOP_VARIABLE)
-    
-    ;the stop variable is turned on when there are no more particles to capture during the given time. If the stop_variable is turned on then we break out of this while loop.
-    IF (STOP_VARIABLE EQ 'ON')THEN BREAK
-    ;if first run equals 2 then we know that we have particles for the given conditions. this will get checked in an if staemnt near the end of the program. 
-    first_run=2
-    ;prints the page number to the output file
-    n=text(.97,.5, position=[.9,.985,.999,.99], font_size= 25, 'Page ' + STRTRIM(string(page),2))
-
-    ;The w.save, /append function is not in a logical place.
-    ;There are two issues with having this save function in a more logical place, such as beneath where we create our image. 
-    ;we need to use the w.save, /append function to allow us to create multipage pdfs
-    ;To use the w.save, /append function we also need to use the w.save,/close function. there are no other closing methods that counter the /append function 
-    ;issue 1: because we have to use both the /append and /close function this means that we have to save twice, this leads to duplicate last pages in certain senerios. 
-    ;to fix this we tried to not save twice if those senerios we present, this lead to issue 2. 
-    ;Issue 2: we didnt want to save twice but we have to use the /append function, but there will be no /close function used. 
-    ;this lead to the pdf never being closed and therefore multiple probe types would be on the same pdf document. 
-    ;The heart of both of these issues occurs when we have a full page of buffers on the last page on the pdf. 
-    ;moving the save function to this location was the best solution that we could find. 
-    ;moving the save, /append to here allows the program to save the full window as we normally would and before variables get changed, mainly run, w, and i
-    ;It also allows for the program to check to make sure there are more particles before it uses the /append function. 
-    ;seeing that the w.save, /append function is beneath the break for the stop variable, 
-    ;the program will exit the while loop if there are no more particles before the save, /append is execuited.
-    ;When the program breaks out of this while loop, the only save function that can be used is the save, /close.
-    IF (run EQ 10) THEN BEGIN
-      w.SAVE, Output_file_final, /Append
-      page=page+1
-      Run=0
-    ENDIF
-
-
-
-    ;We unpack the variables that were created from the OAP_QUICKLOOK_GET_IMAGE fuction below
-    DATA_RECORD=FINAL_VARIABLES.DATA_RECORDS
-    TIME_DIS_STT=FINAL_VARIABLES.TIME_DIS_STT
-    TIME_DIS_STP=FINAL_VARIABLES.TIME_DIS_STP
-    Run=Run+1
-    
-    
-    
-    ;for the date of the 08/10/2020 the HVPS probe time was behind by about 2 minutes and 20 seconds.
-    ;To make up for this, if the date entered is '20200810' then the time for
-    ;the HVPS will be moved up by 140s. (The HVPS clock was 140s slow (behind))
-    IF ((STARTING_VARIABLES.FIELD03 EQ 20200810) AND (PRBTYPE_T EQ 'HVPS')) THEN BEGIN
-      TEMP=HHMMSS2SEC(TIME_DIS_STT)
-      TEMP=TEMP+140
-      TIME_DIS_STT=SEC2DECHHMMSS(TEMP)
-      TEMP=HHMMSS2SEC(TIME_DIS_STP)
-      TEMP=TEMP+140
-      TIME_DIS_STP=SEC2DECHHMMSS(TEMP)
-    ENDIF
-    
-    ;creates a window for our buffers to be displayed on when doing multiple pages
-    IF (Run EQ 1) THEN w=window(dimension=[2550,3330],/buffer)
+      ENDFOR
+    ENDIF ELSE BEGIN
+      ;This line triggers if there is no particles in the file. It prints the following text to the file.
+      n=text(.97,.5, position=[0,.8,.001,.85], font_size= 33, 'THERE ARE NO PARTICLES WITHIN THE GIVEN CONDITIONS')
+    ENDELSE
+  ENDIF
+  ;if first run equals 2 then we know that we have particles for the given conditions. this will get checked in an if staemnt near the end of the program. 
+  first_run=2
+  ;prints the page number to the output file
   
-    ;sets up the postion of the buffers based on which run we are on.
-    A= (((10.-Run)/10)+.001)
-    B= (A+.099) 
-   
-    ;this puts the buffers in the window
-    i=image(transpose(LONG(data_record[*,*])), /current, POSITION=[0,A,1,B], RGB_TABLE=38,  $
-      TITLE= STRTRIM(string(time_dis_stt),2) + '-' + STRTRIM(string(time_dis_stp),2) + ' UTC', $
-      Font_Size=45)
   
-    ;resets variables to allow for another loop
-    tot_slice=0
-    first= stp + 1
-    part_cnt= 0
-  ENDWHILE 
-  
-  ;If first run is equal to 1 when we reach here then that means that there were no particles in the file.
-  ;This adds a text to the output file tellign the user why there are no particles
+  ;The w.save, /append function is not in a logical place.
+  ;There are two issues with having this save function in a more logical place, such as beneath where we create our image. 
+  ;we need to use the w.save, /append function to allow us to create multipage pdfs
+  ;To use the w.save, /append function we also need to use the w.save,/close function. there are no other closing methods that counter the /append function 
+  ;issue 1: because we have to use both the /append and /close function this means that we have to save twice, this leads to duplicate last pages in certain senerios. 
+  ;to fix this we tried to not save twice if those senerios we present, this lead to issue 2. 
+  ;Issue 2: we didnt want to save twice but we have to use the /append function, but there will be no /close function used. 
+  ;this lead to the pdf never being closed and therefore multiple probe types would be on the same pdf document. 
+  ;The heart of both of these issues occurs when we have a full page of buffers on the last page on the pdf. 
+  ;moving the save function to this location was the best solution that we could find. 
+  ;moving the save, /append to here allows the program to save the full window as we normally would and before variables get changed, mainly run, w, and i
+  ;It also allows for the program to check to make sure there are more particles before it uses the /append function. 
+  ;seeing that the w.save, /append function is beneath the break for the stop variable, 
+  ;the program will exit the while loop if there are no more particles before the save, /append is execuited.
+  ;When the program breaks out of this while loop, the only save function that can be used is the save, /close.
+  ;We unpack the variables that were created from the OAP_QUICKLOOK_GET_IMAGE fuction below
+  ;for the date of the 08/10/2020 the HVPS probe time was behind by about 2 minutes and 20 seconds.
+  ;To make up for this, if the date entered is '20200810' then the time for
+  ;the HVPS will be moved up by 140s. (The HVPS clock was 140s slow (behind))
+
   IF (FIRST_RUN EQ 1) THEN BEGIN
     n=text(.97,.5, position=[0,.8,.001,.85], font_size= 33, 'THERE ARE NO PARTICLES WITHIN THE GIVEN CONDITIONS')
   ENDIF
-  
   ;this function saves the window to a pdf. It also closes the pdf, and doesnt allow it to be appended anymore
   w.SAVE, Output_file_final,/close
   page=1
-
+  
   ;resets the varaibles to allow for another line to be read from a csv file
-  STOP_VARIABLE='OFF'
-  RUN= 1
+  ;STOP_VARIABLE='OFF'
+  ;RUN= 1
   First_run=1
   
 ENDWHILE

@@ -114,7 +114,7 @@ diam = diam * 1000.  ;in file, diameter is given in mm, this changes to microns
 ;Loop over all particles -- first and last are provided and currently represent the first
 ;  and last *possible* particle to be displayed based on start and end times and what is
 ;  being currently displayed (if anything)
-time_disp= LONARR(1700)-999
+time_disp= LONARR(1700)-9990
 pos_disp = LONARR(1700)-999
 part_cnt = 0L
 disp_parts=(0L)

@@ -19,8 +19,7 @@ if (STRPOS(PROC_File, '2DS.V')) NE (STRPOS(DIMG_file, '2DS.V')) THEN Stop_variab
 if (STRPOS(PROC_File, 'HVPS')) NE (STRPOS(DIMG_file, 'HVPS')) THEN Stop_variable = 'on' 
 if (STRPOS(PROC_File, 'CIP')) NE (STRPOS(DIMG_file, 'CIP')) THEN Stop_variable = 'on' 
 if (STRPOS(PROC_File, 'cip')) NE (STRPOS(DIMG_file, 'cip')) THEN Stop_variable = 'on' 
-
-
+Stop_variable = 'off'
 IF Stop_variable EQ 'on' THEN BEGIN
   print, '******'
   print, 'DIMG and PROC unmatched, check probe type and spelling'
